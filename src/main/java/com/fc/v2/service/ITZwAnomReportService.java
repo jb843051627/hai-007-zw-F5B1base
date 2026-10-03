@@ -59,11 +59,18 @@ public interface ITZwAnomReportService {
     TZwAnomReport close(Long reportId, String opinion, String operator, List<String> rejectMsg);
 
     /**
-     * 回退上一步：已结案的先回到"待结案"（同时解除结案锁、重开盯办）；在办的从当前步退回一格。
-     * 只追加动作台账，快照/复测环节/盯办旧条原样留痕；已反映供水户这一事实不随回退撤销
-     （登记更正口仍锁死）。可一格格从最后一步退回第一步。
+     * 结案回退：只受理"当前确为已结案归档"的单，退回"待结案"（解除结案锁、重开盯办）。
+     * 条件更新钉死 status=已结案，双击/并发的第二笔 0 行被拒，不会顺着再退一格。
+     * 只追加动作台账，快照/复测环节/盯办旧条原样留痕；archived/reflected/reported 不清除。
      */
-    TZwAnomReport rollbackClose(Long reportId, String reason, String operator, List<String> rejectMsg);
+    TZwAnomReport rollbackClosed(Long reportId, String reason, String operator, List<String> rejectMsg);
+
+    /**
+     * 在办处置步退回一格：fromStep 必须与库内当前步一致（页面按下时所见步），
+     * 条件更新钉死 status=在办 and step_no=fromStep，双击/并发的第二笔步号已对不上，0 行被拒。
+     */
+    TZwAnomReport stepBack(Long reportId, Integer fromStep, String reason, String operator,
+                           List<String> rejectMsg);
 
     /** 上报单下动作台账（正序） */
     List<com.fc.v2.model.auto.TZwReportAction> listActions(Long reportId);

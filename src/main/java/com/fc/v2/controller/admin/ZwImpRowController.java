@@ -173,7 +173,8 @@ public class ZwImpRowController extends BaseController {
             return AjaxResult.error(rejectMsg.isEmpty() ? "核实未生效" : rejectMsg.get(0));
         }
         return AjaxResult.success(result.intValue() == 1
-                ? "核实成，整批已归档并锁定为只读" : "核实不成已记名，该批次归只读终态");
+                ? "核实成，整批已归档并锁定为只读"
+                : "核实不成已记名；请按原因处置后重新导入该批次，再行核实");
     }
 
     @Log(title = "检测数据明细导出", action = "export")

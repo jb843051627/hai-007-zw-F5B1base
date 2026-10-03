@@ -145,36 +145,47 @@ public class TZwArchCardServiceImpl extends ServiceImpl<TZwArchCardMapper, TZwAr
     }
 
     /**
-     * 按底档三档阈值折保障强度层级；等于上限归入该档。
-     * 底档缺失或阈值未维护时判不出层级，置 0，绝不拿 null 去比。
+     * 按底档三档阈值折保障强度层级；与水质定级 {@code WaterGrade.level} 同构、同一套边界口径：
+     * 规模越过（含恰等于）某档上限即升入上一档；界值空＝该档不设，越过在设界值后钉在最高在设档，
+     * 不向空档硬拔；三界值全空给不出层级，置 0。
+     * 种子口径 30/80/200：等于 30 即二档、等于 80 即三档、等于 200 即四档。
      */
     private static Integer gradeLevel(TZwSource source, BigDecimal qty) {
         if (source == null || qty == null) {
             return 0;
         }
-        if (source.getTh1Max() != null && qty.compareTo(source.getTh1Max()) <= 0) {
-            return 1;
-        }
-        if (source.getTh2Max() != null && qty.compareTo(source.getTh2Max()) <= 0) {
-            return 2;
-        }
-        if (source.getTh3Max() != null && qty.compareTo(source.getTh3Max()) <= 0) {
-            return 3;
-        }
         if (source.getTh1Max() == null && source.getTh2Max() == null && source.getTh3Max() == null) {
             return 0;
         }
-        return 4;
+        int grade = 1;
+        if (source.getTh1Max() != null && qty.compareTo(source.getTh1Max()) >= 0) {
+            grade = 2;
+        }
+        if (source.getTh2Max() != null && qty.compareTo(source.getTh2Max()) >= 0) {
+            grade = 3;
+        }
+        if (source.getTh3Max() != null && qty.compareTo(source.getTh3Max()) >= 0) {
+            grade = 4;
+        }
+        return grade;
     }
 
     @Override
     public int deleteTZwArchCardByIds(String ids) {
         Long[] idArr = ConvertUtil.toLongArray(ids);
-        return this.baseMapper.deleteBatchIds(Arrays.asList(idArr));
+        // 软删留痕：档案卡编号/版次被流程记录引用，物理删会断了对账链
+        return this.baseMapper.update(null, new UpdateWrapper<TZwArchCard>()
+                .set("del_flag", 1)
+                .in("id", Arrays.asList(idArr))
+                .eq("del_flag", 0));
     }
 
     @Override
     public int deleteTZwArchCardById(Long id) {
-        return this.baseMapper.deleteById(id);
+        // 软删留痕，同上
+        return this.baseMapper.update(null, new UpdateWrapper<TZwArchCard>()
+                .set("del_flag", 1)
+                .eq("id", id)
+                .eq("del_flag", 0));
     }
 }

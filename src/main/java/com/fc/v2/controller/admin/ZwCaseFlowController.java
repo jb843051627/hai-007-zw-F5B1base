@@ -7,6 +7,7 @@ import com.fc.v2.common.domain.ResultTable;
 import com.fc.v2.common.log.Log;
 import com.fc.v2.model.auto.TZwCaseFlow;
 import com.fc.v2.service.ITZwCaseFlowService;
+import com.fc.v2.shiro.util.ShiroUtils;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
@@ -44,7 +45,9 @@ public class ZwCaseFlowController extends BaseController {
     @RequiresPermissions("zwCaseFlow:list")
     @ResponseBody
     public ResultTable list(TZwCaseFlow record) {
-        QueryWrapper<TZwCaseFlow> queryWrapper = new QueryWrapper<TZwCaseFlow>();
+        QueryWrapper<TZwCaseFlow> queryWrapper = new QueryWrapper<TZwCaseFlow>()
+                .eq("del_flag", 0)
+                .orderByDesc("id");
         startPage();
         com.github.pagehelper.PageInfo<TZwCaseFlow> page =
                 new com.github.pagehelper.PageInfo<TZwCaseFlow>(zwCaseFlowService.selectTZwCaseFlowList(queryWrapper));
@@ -57,7 +60,7 @@ public class ZwCaseFlowController extends BaseController {
     @RequiresPermissions("zwCaseFlow:advance")
     @ResponseBody
     public AjaxResult advance(Long id, String remark) {
-        return toAjax(zwCaseFlowService.advance(id, remark) != null ? 1 : 0);
+        return toAjax(zwCaseFlowService.advance(id, remark, ShiroUtils.getLoginName()) != null ? 1 : 0);
     }
 
     @Log(title = "水质异常处置工单回退", action = "rollback")
@@ -66,6 +69,6 @@ public class ZwCaseFlowController extends BaseController {
     @RequiresPermissions("zwCaseFlow:rollback")
     @ResponseBody
     public AjaxResult rollback(Long id, String remark) {
-        return toAjax(zwCaseFlowService.rollback(id, remark) != null ? 1 : 0);
+        return toAjax(zwCaseFlowService.rollback(id, remark, ShiroUtils.getLoginName()) != null ? 1 : 0);
     }
 }

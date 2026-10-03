@@ -406,7 +406,7 @@ CREATE TABLE IF NOT EXISTS t_zw_anom_report (
   close_opinion varchar(500) DEFAULT NULL COMMENT '结案结论（归档那一次写下的为准）',
   closed_by varchar(64) DEFAULT NULL COMMENT '结案归档人',
   closed_time datetime DEFAULT NULL COMMENT '结案归档时刻',
-  status int DEFAULT '0' COMMENT '单据情形 0在办 1已结案归档 2已退回(结案段回退作废，整单终态留痕)',
+  status int DEFAULT '0' COMMENT '单据情形 0在办 1已结案归档（结案回退后落回0，处置段可重走；archived 不清除）',
   del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除（上报单不删）',
   create_by varchar(64) DEFAULT NULL COMMENT '创建者',
   create_time datetime DEFAULT NULL COMMENT '创建时间',

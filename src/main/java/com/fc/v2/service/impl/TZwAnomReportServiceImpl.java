@@ -169,6 +169,10 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
         }
         // 联系人允许在反映后步随时订正（需求本意：卡住多半是联系人取错/联系不上）；
         // 已开盯办条各自带着当时快照不受影响，新开的盯办条照新联系人钉。
+        // 双击同一联系人重提：原样幂等返回，不更新、不重记台账（同一动作点两下不许两边各记一笔）
+        if (!first && c.getId().equals(r.getContactId())) {
+            return this.zwAnomReportMapper.selectById(r.getId());
+        }
 
         Date now = new Date();
         UpdateWrapper<TZwAnomReport> uw = new UpdateWrapper<TZwAnomReport>()
@@ -316,8 +320,8 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public TZwAnomReport rollbackClose(Long reportId, String reason, String operator,
-                                       List<String> rejectMsg) {
+    public TZwAnomReport rollbackClosed(Long reportId, String reason, String operator,
+                                        List<String> rejectMsg) {
         String text = reason == null ? "" : reason.trim();
         if (text.isEmpty()) {
             return reject(rejectMsg, "回退要写明原因（逐笔留痕，与当时经办屏对得上）");
@@ -327,62 +331,69 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
             return reject(rejectMsg, "上报单不存在");
         }
         Date now = new Date();
-        int step = r.getStepNo() == null ? 0 : r.getStepNo().intValue();
-        boolean wasClosed = r.getStatus() != null
-                && r.getStatus().intValue() == AnomalyChain.REPORT_CLOSED;
-
-        int targetStep;
-        String act;
-        String detail;
-        if (wasClosed) {
-            // 已结案：先退回"待结案"，解除结案锁（archived 不清除，登记更正照样锁死）
-            targetStep = AnomalyChain.STEP_TO_CLOSE;
-            act = AnomalyChain.ACT_CLOSE_ROLLBACK;
-            detail = "结案回退至待结案：" + text;
-        } else {
-            if (r.getStatus() == null
-                    || r.getStatus().intValue() != AnomalyChain.REPORT_RUNNING) {
-                return reject(rejectMsg, "单不在办，不能回退");
-            }
-            if (step == AnomalyChain.STEP_INTERNAL) {
-                return reject(rejectMsg, "已在第一步（内部处置），无处可退；上报本身不可撤");
-            }
-            // 在办：退回上一步。从待结案退时，要复测的回复测回程、不要复测的回反映后
-            if (step == AnomalyChain.STEP_TO_CLOSE) {
-                targetStep = int1(r.getNeedRetest())
-                        ? AnomalyChain.STEP_RETEST_BACK : AnomalyChain.STEP_REFLECTED;
-            } else {
-                targetStep = step - 1;
-            }
-            act = AnomalyChain.ACT_STEP_BACK;
-            detail = "处置步由「" + AnomalyChain.stepName(step) + "」退回「"
-                    + AnomalyChain.stepName(targetStep) + "」：" + text;
-        }
-
-        UpdateWrapper<TZwAnomReport> uw = new UpdateWrapper<TZwAnomReport>()
+        // 只认"已结案归档且停在待结案"：条件钉死 status=CLOSED + step=TO_CLOSE，
+        // 双击/并发的第二笔进来时已是"在办"，0 行被拒——不会顺着退回处置段（退过头的旧患）
+        int n = this.zwAnomReportMapper.update(null, new UpdateWrapper<TZwAnomReport>()
                 .set("status", AnomalyChain.REPORT_RUNNING)
+                .set("step_no", AnomalyChain.STEP_TO_CLOSE)
+                .eq("id", r.getId())
+                .eq("status", AnomalyChain.REPORT_CLOSED)
+                .eq("step_no", AnomalyChain.STEP_TO_CLOSE)
+                .eq("del_flag", 0));
+        if (n == 0) {
+            return reject(rejectMsg, "单当前不是已结案归档态（可能已回退，请勿重复操作），请刷新查看");
+        }
+        // 只解除 closed；archived/reflected/reported 三个锁保持置位，登记仍不可更正
+        this.zwAnomalyMapper.update(null, new UpdateWrapper<TZwAnomaly>()
+                .set("closed", 0)
+                .eq("id", r.getAnomId())
+                .eq("closed", 1));
+        appendAction(r.getId(), AnomalyChain.ACT_CLOSE_ROLLBACK, AnomalyChain.STEP_TO_CLOSE,
+                "结案回退至待结案：" + text, operator, now);
+        // 待结案步盯办照该步周期重开；前段流水原样不动
+        this.zwFollowService.openStep(r.getId(), AnomalyChain.STEP_TO_CLOSE, now);
+        return this.zwAnomReportMapper.selectById(r.getId());
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public TZwAnomReport stepBack(Long reportId, Integer fromStep, String reason, String operator,
+                                  List<String> rejectMsg) {
+        String text = reason == null ? "" : reason.trim();
+        if (text.isEmpty()) {
+            return reject(rejectMsg, "回退要写明原因（逐笔留痕，与当时经办屏对得上）");
+        }
+        if (fromStep == null) {
+            return reject(rejectMsg, "缺少退回前所在处置步，请刷新页面后重试");
+        }
+        TZwAnomReport r = requireRunning(reportId);
+        if (r == null) {
+            return reject(rejectMsg, "上报单不在办（已结案归档请走结案回退），不能退处置步");
+        }
+        int step = fromStep.intValue();
+        if (step <= AnomalyChain.STEP_INTERNAL) {
+            return reject(rejectMsg, "已在第一步（内部处置），无处可退；上报本身不可撤");
+        }
+        // 从待结案退时，要复测的回复测回程、不要复测的回反映后；其余严格只退一格
+        int targetStep = step == AnomalyChain.STEP_TO_CLOSE
+                ? (int1(r.getNeedRetest())
+                        ? AnomalyChain.STEP_RETEST_BACK : AnomalyChain.STEP_REFLECTED)
+                : step - 1;
+        // 条件钉死操作发生时的步号：双击的第二笔进来时步号已被前一笔改掉，0 行被拒
+        int n = this.zwAnomReportMapper.update(null, new UpdateWrapper<TZwAnomReport>()
                 .set("step_no", targetStep)
                 .eq("id", r.getId())
-                .eq("del_flag", 0);
-        if (wasClosed) {
-            uw.eq("status", AnomalyChain.REPORT_CLOSED);
-        } else {
-            uw.eq("status", AnomalyChain.REPORT_RUNNING).eq("step_no", step);
-        }
-        int n = this.zwAnomReportMapper.update(null, uw);
+                .eq("status", AnomalyChain.REPORT_RUNNING)
+                .eq("step_no", step)
+                .eq("del_flag", 0));
         if (n == 0) {
-            return reject(rejectMsg, "已被并发改动，请刷新后重试");
+            return reject(rejectMsg, "处置步已被并发改动，请刷新后重试");
         }
-        if (wasClosed) {
-            // 只解除 closed；archived/reflected/reported 三个锁保持置位，登记仍不可更正
-            this.zwAnomalyMapper.update(null, new UpdateWrapper<TZwAnomaly>()
-                    .set("closed", 0)
-                    .eq("id", r.getAnomId())
-                    .eq("closed", 1));
-        }
-        appendAction(r.getId(), act, targetStep, detail, operator, now);
-        // 退回的那一步盯办照该步周期重开（新条 prev_follow_at 仍接旧条，前段流水原样不动）
-        this.zwFollowService.openStep(r.getId(), targetStep, now);
+        appendAction(r.getId(), AnomalyChain.ACT_STEP_BACK, targetStep,
+                "处置步由「" + AnomalyChain.stepName(step) + "」退回「"
+                        + AnomalyChain.stepName(targetStep) + "」：" + text,
+                operator, new Date());
+        this.zwFollowService.openStep(r.getId(), targetStep, new Date());
         return this.zwAnomReportMapper.selectById(r.getId());
     }
 
@@ -461,8 +472,21 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
         if (nr == null) {
             return null;
         }
-        this.zwAnomReportMapper.update(null, new UpdateWrapper<TZwAnomReport>()
-                .set("retest_id", nr.getId()).eq("id", r.getId()));
+        // 双击另起一轮：startNewRound 撞同轮唯一键时会回收到"最新一轮"；
+        // 若上报单指针已指向它（第一笔已落账），幂等返回现有复测视图，不改指针、不重记台账
+        if (nr.getId().equals(r.getRetestId())) {
+            return this.zwRetestService.buildView(nr.getId(), operator);
+        }
+        int pn = this.zwAnomReportMapper.update(null, new UpdateWrapper<TZwAnomReport>()
+                .set("retest_id", nr.getId())
+                .eq("id", r.getId())
+                // 指针必须仍指着上一轮；已被并发改写则本笔不收，整笔回滚
+                .eq("retest_id", r.getRetestId())
+                .eq("status", AnomalyChain.REPORT_RUNNING)
+                .eq("del_flag", 0));
+        if (pn == 0) {
+            throw new IllegalStateException("上报单复测指针已被并发改动，本轮不成立，整笔回滚");
+        }
         appendAction(r.getId(), AnomalyChain.ACT_RETEST_OPEN, r.getStepNo(),
                 "第" + nr.getRoundNo() + "轮复测单「" + nr.getRetestNo()
                         + "」已开出（前序否决轮原样留痕），从首环重新填报",

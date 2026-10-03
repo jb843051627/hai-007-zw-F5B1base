@@ -48,7 +48,7 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
      * 与回退并发时以库内当前档为准，条件不满足（0 行）即被拒。
      */
     @Override
-    public TZwCaseFlow advance(Long id, String remark) {
+    public TZwCaseFlow advance(Long id, String remark, String operator) {
         TZwCaseFlow r = this.zwCaseFlowMapper.selectById(id);
         if (r == null) {
             return null;
@@ -58,12 +58,14 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
             // 已封卷，不许再推进、不许再参与一轮执行
             return null;
         }
-        int next = st + 2;
+        int next = st + 1;
         int rows = this.zwCaseFlowMapper.update(null, new UpdateWrapper<TZwCaseFlow>()
                 .set("stage", next)
                 // 推进到顶档与"已封存"同一条更新钉死，缺一样都不算成
                 .set("status", next >= MAX_STAGE ? STATUS_TERMINAL : STATUS_ACTIVE)
                 .set("last_action", remark)
+                .set("update_by", operator)
+                .set("update_time", new java.util.Date())
                 .eq("id", id)
                 .eq("stage", st)
                 .ne("status", STATUS_TERMINAL)
@@ -76,7 +78,7 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
      * 与推进并发时同样靠条件更新兜底，0 行即被拒。
      */
     @Override
-    public TZwCaseFlow rollback(Long id, String remark) {
+    public TZwCaseFlow rollback(Long id, String remark, String operator) {
         TZwCaseFlow r = this.zwCaseFlowMapper.selectById(id);
         if (r == null) {
             return null;
@@ -91,8 +93,12 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
                 // 档位回退与落定情形在同一条更新里改回"在办"，不许留着"已封存/已核讫"的旧口径
                 .set("status", STATUS_ACTIVE)
                 .set("last_action", remark)
+                .set("update_by", operator)
+                .set("update_time", new java.util.Date())
                 .eq("id", id)
                 .eq("stage", st)
+                // 封卷锁：已封存的单不许回退复活，推进/回退两个口同一把锁
+                .eq("status", STATUS_ACTIVE)
                 .eq("del_flag", 0));
         return rows > 0 ? this.zwCaseFlowMapper.selectById(id) : null;
     }
@@ -103,25 +109,27 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
         if (r == null) {
             return false;
         }
-        // 已封卷的单内容封死，不许再改
+        // 已封卷的单内容封死，不许再改：锁位在更新条件里兜底，不靠读后判；
+        // 审计列随内容改动写明，事后倒查说得出谁在什么时候动过记事
         int rows = this.zwCaseFlowMapper.update(null, new UpdateWrapper<TZwCaseFlow>()
                 .set("content", remark)
+                .set("update_time", new java.util.Date())
                 .eq("id", id)
+                .ne("status", STATUS_TERMINAL)
                 .eq("del_flag", 0));
         return rows > 0;
     }
 
     @Override
     public boolean remove(Long id) {
-        TZwCaseFlow r = this.zwCaseFlowMapper.selectById(id);
-        if (r == null) {
-            return false;
-        }
-        // 已封卷的单留档，不得删除
-        if (r.getStatus() != null && r.getStatus() == STATUS_TERMINAL) {
-            return false;
-        }
-        return this.zwCaseFlowMapper.deleteById(id) > 0;
+        // 已封卷的单留档不得删；其余也只软删，流程台账不断档；
+        // 锁位与删除合成一条条件更新，读到后被封卷的并发改动同样 0 行被拒
+        int rows = this.zwCaseFlowMapper.update(null, new UpdateWrapper<TZwCaseFlow>()
+                .set("del_flag", 1)
+                .eq("id", id)
+                .ne("status", STATUS_TERMINAL)
+                .eq("del_flag", 0));
+        return rows > 0;
     }
 
 }

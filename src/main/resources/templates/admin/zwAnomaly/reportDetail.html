@@ -30,7 +30,7 @@
         <span class="kv">点位：<b th:text="${r.siteNo}"></b></span>
         <span class="kv">检测日：<b th:text="${#dates.format(r.testDay,'yyyy-MM-dd')}"></b></span>
         <span class="kv">指标：<b th:text="${r.itemCode}"></b></span>
-        <span class="kv">档位：<b th:text="${a.gradeLevel == 4 ? '严重超标' : (a.gradeLevel == 3 ? '超标' : '关注')}"></b></span>
+        <span class="kv">档位：<b th:text="${a.gradeLevel == 4 ? '严重超标' : (a.gradeLevel == 3 ? '超标' : (a.gradeLevel == 2 ? '关注' : (a.gradeLevel == 1 ? '合格' : '不参评')))}"></b></span>
         <span class="kv">停水：<b th:text="${r.needStop == 1 ? '要' : '不要'}"></b></span>
         <span class="kv">复测：<b th:text="${r.needRetest == 1 ? '要' : '不要'}"></b></span>
         <span class="kv" th:if="${r.accountName != null}">供水户：<b th:text="${r.accountName}"></b>
@@ -227,12 +227,16 @@
         form.render();
         let A = rootPath + '/zwAnomaly/', R = rootPath + '/zwRetest/', F = rootPath + '/zwFollow/';
 
+        // 同一动作在页面刷新前只准发一次：成功即整页刷新，失败才解锁
+        let busy = false;
         function post(url, data, okMsg) {
+            if (busy) { return; }
+            busy = true;
             $.post(url, data, function (res) {
                 layer.msg(res.msg || (res.code === 200 ? '已落账' : '未受理'),
                     {icon: res.code === 200 ? 1 : 2, time: 900},
-                    function () { if (res.code === 200) location.reload(); });
-            });
+                    function () { if (res.code === 200) location.reload(); else busy = false; });
+            }).fail(function () { busy = false; });
         }
         function promptAct(title, url, field) {
             layer.prompt({title: title, formType: 2}, function (text, idx) {
@@ -256,9 +260,12 @@
                 layer.close(idx); post(A + 'close', {reportId: REPORT_ID, opinion: opinion});
             });
         });
-        $('#btn-back3').on('click', () => promptAct('退回原因', A + 'rollback', {reportId: REPORT_ID}));
-        $('#btn-rollback').on('click', () => promptAct('结案回退原因（逐笔留痕）', A + 'rollback', {reportId: REPORT_ID}));
-        $('#btn-stepback').on('click', () => promptAct('退回上一格的原因', A + 'rollback', {reportId: REPORT_ID}));
+        $('#btn-back3').on('click', () => promptAct('退回原因', A + 'stepBack',
+            {reportId: REPORT_ID, fromStep: 3}));
+        $('#btn-rollback').on('click', () => promptAct('结案回退原因（逐笔留痕）', A + 'rollbackClosed',
+            {reportId: REPORT_ID}));
+        $('#btn-stepback').on('click', () => promptAct('退回上一格的原因', A + 'stepBack',
+            {reportId: REPORT_ID, fromStep: [[${view.report.stepNo}]]}));
         $('#btn-retry').on('click', () => post(R + 'retry', {reportId: REPORT_ID}));
         $('#btn-runDue').on('click', () => $.post(F + 'runDue', {}, function (res) {
             layer.msg(res.msg, {icon: 1, time: 1000}, () => location.reload());

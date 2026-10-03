@@ -19,11 +19,11 @@ public interface ITZwCaseFlowService {
     /** 列表查询（流转台账） */
     List<TZwCaseFlow> selectTZwCaseFlowList(QueryWrapper<TZwCaseFlow> queryWrapper);
 
-    /** 推进一档：返回更新后的单据；被拒返回 null */
-    TZwCaseFlow advance(Long id, String remark);
+    /** 推进一档：返回更新后的单据；被拒返回 null。operator 落审计列，供事后倒查 */
+    TZwCaseFlow advance(Long id, String remark, String operator);
 
-    /** 回退一档：返回更新后的单据；被拒返回 null */
-    TZwCaseFlow rollback(Long id, String remark);
+    /** 回退一档：返回更新后的单据；被拒返回 null。operator 落审计列，供事后倒查 */
+    TZwCaseFlow rollback(Long id, String remark, String operator);
 
     /** 修改内容：已办结不得再改，被拒返回 false */
     boolean updateContent(Long id, String remark);

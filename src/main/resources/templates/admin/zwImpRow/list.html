@@ -156,8 +156,10 @@
                         }
                         return dec || act || '';
                     }},
-                {title: '等级', field: 'gradeLevel', align: 'center', width: 80, templet: function (d) {
-                        return d.gradeLevel == null ? '无可用标准' : d.gradeLevel;
+                {title: '等级', field: 'gradeLevel', align: 'center', width: 90, templet: function (d) {
+                        // 与详情页、导出共用一套名目（WaterGrade.gradeText），不摆裸数字
+                        if (d.gradeLevel == null) { return '无可用标准'; }
+                        return ['不参评', '合格', '关注', '超标', '严重超标'][d.gradeLevel] || '不参评';
                     }},
                 {title: '有效', field: 'validFlag', align: 'center', width: 70, templet: function (d) {
                         return d.validFlag === 1 ? '有效' : (d.validFlag === 0 ? '无效' : '');

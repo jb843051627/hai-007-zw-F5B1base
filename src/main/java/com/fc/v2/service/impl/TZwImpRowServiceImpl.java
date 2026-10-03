@@ -137,15 +137,22 @@ public class TZwImpRowServiceImpl implements ITZwImpRowService {
         result.setTotal(rows.size());
 
         TZwImpBatch batch = selectBatchByNo(batchNo);
-        if (batch != null && (isVerified(batch) || int1(batch.getArchived()))) {
-            // 已核实/已归档：整份拒绝，已核实的几条绝不翻出来重复核
-            return ImpImportResult.fileError("批次「" + batchNo + "」已核实"
-                    + (int1(batch.getArchived()) ? "并归档（只读）" : "") + "，不可重新导入");
+        if (batch != null && (int1(batch.getArchived())
+                || (batch.getVerifyResult() != null
+                    && batch.getVerifyResult().intValue() == VERIFY_PASS))) {
+            // 只有"核实成并归档"才整份只读拒绝；核实不成(2)的单允许改正重导、再次核实
+            return ImpImportResult.fileError("批次「" + batchNo + "」已核实成并归档（只读），不可重新导入");
         }
 
         String hash = contentHash(rows);
         if (batch != null && hash.equals(batch.getContentHash())) {
-            // 同内容重导：幂等放行，不新增一行、不动任何既有结论
+            // 同内容重导：数据本身不新增一行；但若上一轮是"核实不成"，同内容重导视作已处置后的重新送审，
+            // 撤掉头/行两级的核实不成印，回到待核实——否则幂等放行会把批次永久钉在不可再核实的死态
+            if (batch.getVerifyResult() != null
+                    && batch.getVerifyResult().intValue() == VERIFY_FAIL) {
+                reopenAfterFail(batch);
+            }
+            // 同内容重导：幂等放行，不新增一行、不动既有数据结论
             result.setIdempotent(true);
             result.setBlocked(int1(batch.getBlocked()));
             result.setImported(countLedger(batchNo));
@@ -235,23 +242,36 @@ public class TZwImpRowServiceImpl implements ITZwImpRowService {
             this.zwImpRowMapper.insert(r);
         }
 
-        // 批次头随本批定论落账（重导即刷新拦截结论；核实字段一根手指都不碰）。
+        // 批次头随本批定论落账（重导即刷新拦截结论）。
         // 更新走显式 UpdateWrapper：先拦后改合格重导时 block_msg 必须能清成 NULL（updateById 会跳过 null）。
+        // 上一轮"核实不成"的批次随重导撤掉核实印，重新回到待核实，处置后可再次核实。
         String blockMsg = blocked ? joinMessages(hardErrors) : null;
         UpdateWrapper<TZwImpBatch> headSet = new UpdateWrapper<TZwImpBatch>()
                 .set("file_name", fileName)
                 .set("total_rows", rows.size())
                 .set("blocked", blocked ? 1 : 0)
                 .set("block_msg", blockMsg)
-                .set("content_hash", hash)
-                .eq("del_flag", 0);
+                .set("content_hash", hash);
+        if (batch.getId() != null && batch.getVerifyResult() != null) {
+            headSet.set("verify_result", null)
+                    .set("verify_reason", null)
+                    .set("verify_by", null)
+                    .set("verify_time", null);
+        }
+        headSet.eq("del_flag", 0);
         if (batch.getId() == null) {
             batch.setFileName(fileName);
             batch.setTotalRows(Integer.valueOf(rows.size()));
             batch.setBlocked(blocked ? 1 : 0);
             batch.setBlockMsg(blockMsg);
             batch.setContentHash(hash);
-            this.zwImpBatchMapper.insert(batch);
+            try {
+                // uk_zw_imp_batch_no 兜底并发同批导入：后到事务整笔回滚，正式账不翻倍
+                this.zwImpBatchMapper.insert(batch);
+            } catch (org.springframework.dao.DataIntegrityViolationException dup) {
+                return ImpImportResult.fileError("批次「" + batchNo
+                        + "」正在由另一笔导入处理（并发撞单），本笔未入账，请稍后刷新查看");
+            }
         } else {
             headSet.eq("id", batch.getId());
             this.zwImpBatchMapper.update(null, headSet);
@@ -310,11 +330,11 @@ public class TZwImpRowServiceImpl implements ITZwImpRowService {
         if (batch == null) {
             return reject(rejectMsg, "批次「" + batchNo + "」不存在");
         }
-        if (isVerified(batch) || int1(batch.getArchived())) {
-            // 一批只准核实一次：核实过即只读，第二请求当场拒绝
-            return reject(rejectMsg, "批次「" + batchNo + "」已核实（"
-                    + (batch.getVerifyResult() != null && batch.getVerifyResult().intValue() == VERIFY_PASS
-                            ? "核实成并归档" : "核实不成") + "），不可再次核实");
+        if (int1(batch.getArchived())
+                || (batch.getVerifyResult() != null
+                    && batch.getVerifyResult().intValue() == VERIFY_PASS)) {
+            // 一批只准核实成一次：核实成并归档即只读；核实不成的单改正重导后核实印已撤，可再次核实
+            return reject(rejectMsg, "批次「" + batchNo + "」已核实成并归档，不可再次核实");
         }
         if (result != VERIFY_PASS && result != VERIFY_FAIL) {
             return reject(rejectMsg, "核实结论只能是 核实成(1)/核实不成(2)");
@@ -434,8 +454,35 @@ public class TZwImpRowServiceImpl implements ITZwImpRowService {
         return c == null ? 0 : c.intValue();
     }
 
-    private static boolean isVerified(TZwImpBatch b) {
-        return b.getVerifyResult() != null;
+    /**
+     * "核实不成"批次处置后重新送审：撤掉头与逐行的核实不成印（不归档、archived 始终为 0），
+     * 回到待核实，原始行与定级字段一根不动。
+     */
+    private void reopenAfterFail(TZwImpBatch batch) {
+        this.zwImpRowMapper.update(null, new UpdateWrapper<TZwImpRow>()
+                .set("verify_result", null)
+                .set("verify_reason", null)
+                .set("verify_by", null)
+                .set("verify_time", null)
+                .eq("batch_no", batch.getBatchNo())
+                .eq("verify_result", VERIFY_FAIL)
+                .eq("del_flag", 0));
+        int n = this.zwImpBatchMapper.update(null, new UpdateWrapper<TZwImpBatch>()
+                .set("verify_result", null)
+                .set("verify_reason", null)
+                .set("verify_by", null)
+                .set("verify_time", null)
+                .eq("id", batch.getId())
+                .eq("verify_result", VERIFY_FAIL)
+                .eq("del_flag", 0));
+        if (n == 0) {
+            throw new IllegalStateException("批次已被并发核实，请刷新后重试");
+        }
+        // 同步内存对象，供幂等回值取最新 blocked 等字段
+        batch.setVerifyResult(null);
+        batch.setVerifyReason(null);
+        batch.setVerifyBy(null);
+        batch.setVerifyTime(null);
     }
 
     private static boolean int1(Integer v) {

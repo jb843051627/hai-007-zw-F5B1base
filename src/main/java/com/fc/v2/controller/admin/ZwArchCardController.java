@@ -7,6 +7,7 @@ import com.fc.v2.common.domain.ResultTable;
 import com.fc.v2.common.log.Log;
 import com.fc.v2.model.auto.TZwArchCard;
 import com.fc.v2.service.ITZwArchCardService;
+import com.fc.v2.util.StringUtils;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
@@ -45,6 +46,13 @@ public class ZwArchCardController extends BaseController {
     @ResponseBody
     public ResultTable list(TZwArchCard record) {
         QueryWrapper<TZwArchCard> queryWrapper = new QueryWrapper<TZwArchCard>();
+        // 与其他台账同一口径：页面传的筛选条件原样生效，不再空查全表
+        queryWrapper.like(StringUtils.isNotEmpty(record.getBillNo()), "bill_no", record.getBillNo());
+        queryWrapper.eq(StringUtils.isNotEmpty(record.getSiteNo()), "site_no", record.getSiteNo());
+        queryWrapper.eq(StringUtils.isNotNull(record.getStatus()), "status", record.getStatus());
+        queryWrapper.eq(StringUtils.isNotNull(record.getGradeLevel()),
+                "grade_level", record.getGradeLevel());
+        queryWrapper.orderByDesc("create_time");
         startPage();
         com.github.pagehelper.PageInfo<TZwArchCard> page =
                 new com.github.pagehelper.PageInfo<TZwArchCard>(zwArchCardService.selectTZwArchCardList(queryWrapper));

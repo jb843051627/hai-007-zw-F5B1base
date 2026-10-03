@@ -112,6 +112,18 @@ public class TZwAnomalyServiceImpl implements ITZwAnomalyService {
             if (exist != null) {
                 continue;
             }
+            // 重导的旧版行若已挂着在办/已结上报链（reported=1 不随版置删），新版行不得再登记第二条——
+            // 否则同点位同日同指标两条有效登记，新流程被上报唯一键卡死、旧流程指着置删行，台账断成两截
+            TZwAnomaly live = this.zwAnomalyMapper.selectOne(new QueryWrapper<TZwAnomaly>()
+                    .eq("site_no", r.getSiteNo())
+                    .eq("item_code", r.getItemCode())
+                    .eq("test_day", AnomalyChain.truncateToDay(r.getTestAt()))
+                    .eq("reported", 1)
+                    .eq("del_flag", 0)
+                    .last("limit 1"));
+            if (live != null) {
+                continue;
+            }
             register(r);
         }
     }

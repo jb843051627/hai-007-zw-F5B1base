@@ -225,11 +225,17 @@ public class TZwRetestServiceImpl implements ITZwRetestService {
             // 重取已提交的上一环（取系统钉版），开下一环并钉 prev_*
             TZwRetestNode done = this.zwRetestNodeMapper.selectById(cur.getId());
             openNodeReloaded(r, nextNo, done);
-            this.zwRetestMapper.update(null, new UpdateWrapper<TZwRetest>()
+            int h = this.zwRetestMapper.update(null, new UpdateWrapper<TZwRetest>()
                     .set("status", AnomalyChain.RETEST_RUNNING)
                     .set("current_node", nextNo)
                     .eq("id", retestId)
+                    // 头表推进也要带齐当前环与情形：并发/终态下 0 行回滚，不靠读后判
+                    .eq("current_node", cur.getNodeNo())
+                    .in("status", AnomalyChain.RETEST_WAIT_FIRST, AnomalyChain.RETEST_RUNNING)
                     .eq("del_flag", 0));
+            if (h == 0) {
+                throw new IllegalStateException("复测单已被并发改动，请刷新查看");
+            }
         }
         return this.zwRetestMapper.selectById(retestId);
     }

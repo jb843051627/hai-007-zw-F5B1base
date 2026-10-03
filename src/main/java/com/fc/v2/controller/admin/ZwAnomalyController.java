@@ -190,15 +190,27 @@ public class ZwAnomalyController extends BaseController {
                 : AjaxResult.success("已结案归档，以本次写下的结论为准");
     }
 
-    @Log(title = "结案/处置回退", action = "rollback")
-    @PostMapping("/rollback")
+    @Log(title = "结案回退至待结案", action = "rollbackClosed")
+    @PostMapping("/rollbackClosed")
     @RequiresPermissions("zw:zwAnomaly:close")
     @ResponseBody
-    public AjaxResult rollback(Long reportId, String reason) {
+    public AjaxResult rollbackClosed(Long reportId, String reason) {
         List<String> msg = new ArrayList<String>();
-        TZwAnomReport r = zwAnomReportService.rollbackClose(reportId, reason,
+        TZwAnomReport r = zwAnomReportService.rollbackClosed(reportId, reason,
                 ShiroUtils.getLoginName(), msg);
         return r == null ? AjaxResult.error(msg.isEmpty() ? "回退未生效" : msg.get(0))
-                : AjaxResult.success("已退回上一步，动作台账逐笔留痕");
+                : AjaxResult.success("已结案回退至待结案，动作台账逐笔留痕");
+    }
+
+    @Log(title = "处置步退回上一格", action = "stepBack")
+    @PostMapping("/stepBack")
+    @RequiresPermissions("zw:zwAnomaly:close")
+    @ResponseBody
+    public AjaxResult stepBack(Long reportId, Integer fromStep, String reason) {
+        List<String> msg = new ArrayList<String>();
+        TZwAnomReport r = zwAnomReportService.stepBack(reportId, fromStep, reason,
+                ShiroUtils.getLoginName(), msg);
+        return r == null ? AjaxResult.error(msg.isEmpty() ? "回退未生效" : msg.get(0))
+                : AjaxResult.success("处置步已退回上一格，动作台账逐笔留痕");
     }
 }

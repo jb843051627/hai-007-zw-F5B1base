@@ -188,6 +188,8 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
             // 批准落定与底档退役同一条事务钉齐：单锁死、点退役，缺一样都不算成
             int rows = this.zwStopBillMapper.update(null, new UpdateWrapper<TZwStopBill>()
                     .set("status", StopChain.STATUS_PASS)
+                    .set("update_by", approver.trim())
+                    .set("update_time", new Date())
                     .eq("id", id)
                     .eq("node_no", StopChain.NODE_CHIEF)
                     .eq("round_no", bill.getRoundNo())
@@ -200,7 +202,7 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
             retireSource(bill.getSiteNo());
         } else {
             // 第二道点齐进调度评口；0 行说明单已被并发挪走，回滚刚落的印
-            if (advance(bill, StopChain.NODE_DISPATCH) <= 0) {
+            if (advance(bill, StopChain.NODE_DISPATCH, approver.trim()) <= 0) {
                 throw new IllegalStateException("单据已被并发改动，请刷新后重签");
             }
         }
@@ -246,7 +248,7 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
         if (!StopChain.gateFull(node, here)) {
             return this.zwStopBillMapper.selectById(id);
         }
-        if (advance(bill, StopChain.NODE_CHIEF) <= 0) {
+        if (advance(bill, StopChain.NODE_CHIEF, who) <= 0) {
             throw new IllegalStateException("单据已被并发改动，请刷新后重签");
         }
         return this.zwStopBillMapper.selectById(id);
@@ -288,7 +290,8 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
         return terminate(bill, node, signRole, approver.trim(), StopChain.ACT_DISAGREE, comment);
     }
 
-    /** 申请人撤回：任何在核关口都可撤，落 WITHDRAW 一笔，单到此为止。 */
+    /** 申请人撤回：任何在核关口都可撤，落 WITHDRAW 一笔，单到此为止。
+     *  只认提单本人（单据创建者）——别人有 add 权限也撤不了这张单。 */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public TZwStopBill withdraw(Long id, String applicant, String comment) {
@@ -296,9 +299,30 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
         if (bill == null) {
             return null;
         }
+        String who = applicant.trim();
+        String submitter = submitterOf(bill);
+        if (submitter == null || !submitter.equals(who)) {
+            // 不是提单本人：本口只读，不许终止别人的单
+            return null;
+        }
         int node = bill.getNodeNo();
-        return terminate(bill, node, StopChain.ROLE_APPLICANT, applicant.trim(),
+        return terminate(bill, node, StopChain.ROLE_APPLICANT, who,
                 StopChain.ACT_WITHDRAW, comment);
+    }
+
+    /** 提单人：优先单据创建者；老数据缺失时回查头一道业务提件的落名人（各轮都算） */
+    private String submitterOf(TZwStopBill bill) {
+        if (bill.getCreateBy() != null && !bill.getCreateBy().trim().isEmpty()) {
+            return bill.getCreateBy().trim();
+        }
+        TZwStopSign first = this.zwStopSignMapper.selectOne(new QueryWrapper<TZwStopSign>()
+                .eq("bill_id", bill.getId())
+                .eq("node_no", StopChain.NODE_BUSINESS)
+                .eq("sign_role", StopChain.ROLE_BUSINESS)
+                .eq("del_flag", 0)
+                .orderByAsc("round_no")
+                .last("limit 1"));
+        return first == null ? null : first.getSigner();
     }
 
     /**
@@ -333,6 +357,8 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
                 // 新轮次 + 退回第二道 + 仍在核，三样同一条更新钉齐
                 .set("round_no", nextRound)
                 .set("status", StopChain.STATUS_RUNNING)
+                .set("update_by", approver.trim())
+                .set("update_time", new Date())
                 .eq("id", id)
                 .eq("node_no", StopChain.NODE_CHIEF)
                 .eq("round_no", round)
@@ -419,13 +445,17 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
 
     // ------------------------------------------------------------------
 
-    /** 单据须存在、在核、未删；落名人非空 */
+    /**
+     * 单据须存在、在核、未删；落名人非空。
+     * <p>走行级锁（FOR UPDATE）：同一单的读单、查重、落印、点算、推进在本事务内整段独占，
+     * 调度评口两人并发也按提交先后串行，后到者重数台账即点满，杜绝"2/2 却卡在本口"。
+     */
     private TZwStopBill requireRunning(Long id, String approver) {
         if (id == null || trim(approver).isEmpty()) {
             return null;
         }
-        TZwStopBill bill = this.zwStopBillMapper.selectById(id);
-        if (bill == null || bill.getDelFlag() == null || bill.getDelFlag() != 0) {
+        TZwStopBill bill = this.zwStopBillMapper.selectByIdForUpdate(id);
+        if (bill == null) {
             return null;
         }
         if (bill.getStatus() == null || bill.getStatus() != StopChain.STATUS_RUNNING) {
@@ -448,6 +478,8 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
         }
         int rows = this.zwStopBillMapper.update(null, new UpdateWrapper<TZwStopBill>()
                 .set("status", StopChain.STATUS_STOPPED)
+                .set("update_by", signer)
+                .set("update_time", new Date())
                 .eq("id", bill.getId())
                 .eq("node_no", node)
                 .eq("round_no", bill.getRoundNo())
@@ -459,10 +491,12 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
         return this.zwStopBillMapper.selectById(bill.getId());
     }
 
-    /** 条件推进到下一关口（仍在核） */
-    private int advance(TZwStopBill bill, int nextNode) {
+    /** 条件推进到下一关口（仍在核）；审计列随推进写明谁挪的关口 */
+    private int advance(TZwStopBill bill, int nextNode, String mover) {
         return this.zwStopBillMapper.update(null, new UpdateWrapper<TZwStopBill>()
                 .set("node_no", nextNode)
+                .set("update_by", mover)
+                .set("update_time", new Date())
                 .eq("id", bill.getId())
                 .eq("node_no", bill.getNodeNo())
                 .eq("round_no", bill.getRoundNo())
