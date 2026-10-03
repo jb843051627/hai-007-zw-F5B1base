@@ -57,7 +57,7 @@ public class TZwRetestServiceImpl implements ITZwRetestService {
             // 首轮幂等（上报事务重试/并发开出）
             return rounds.get(rounds.size() - 1);
         }
-        return insertRound(reportId, anomId, siteNo, itemCode, 1, operator);
+        return insertRound(reportId, anomId, siteNo, itemCode, 1, operator, true);
     }
 
     @Override
@@ -81,13 +81,23 @@ public class TZwRetestServiceImpl implements ITZwRetestService {
                 || last.getStatus().intValue() != AnomalyChain.RETEST_VETOED) {
             return reject(rejectMsg, "最近一轮未被否决，不许另起一轮（在办/已走完都不能重开）");
         }
-        return insertRound(reportId, anomId, siteNo, itemCode,
-                (last.getRoundNo() == null ? 1 : last.getRoundNo().intValue()) + 1, operator);
+        TZwRetest started = insertRound(reportId, anomId, siteNo, itemCode,
+                (last.getRoundNo() == null ? 1 : last.getRoundNo().intValue()) + 1, operator, false);
+        if (started == null) {
+            // 并发双击/两路同时另起：uk_zw_retest_round 已被先到者占住，这一路整笔不收，
+            // 不许退回既有轮冒充成功——否则外层会再落一笔 RETEST_OPEN，一个动作记两次流转
+            return reject(rejectMsg, "已被并发另起一轮，请刷新后在新轮填报");
+        }
+        return started;
     }
 
-    /** 插一轮复测（uk_zw_retest_round 兜底并发重轮）并开首环；旧轮原样留着 */
+    /**
+     * 插一轮复测（uk_zw_retest_round 兜底并发重轮）并开首环；旧轮原样留着。
+     * @param returnExistingOnDup 首轮自动开出走 true（上报事务内幂等，撞车取回既有轮）；
+     *                            人工另起一轮走 false（撞车即拒绝，由调用方记失败，不得冒名成功）
+     */
     private TZwRetest insertRound(Long reportId, Long anomId, String siteNo, String itemCode,
-                                  int roundNo, String operator) {
+                                  int roundNo, String operator, boolean returnExistingOnDup) {
         TZwRetest r = new TZwRetest();
         r.setRetestNo(siteNo + "-" + reportId.toString() + "-RT" + (roundNo <= 1 ? "" : "-R" + roundNo));
         r.setReportId(reportId);
@@ -102,6 +112,9 @@ public class TZwRetestServiceImpl implements ITZwRetestService {
         try {
             this.zwRetestMapper.insert(r);
         } catch (DataIntegrityViolationException dup) {
+            if (!returnExistingOnDup) {
+                return null;
+            }
             List<TZwRetest> rounds = listRounds(reportId);
             return rounds.isEmpty() ? null : rounds.get(rounds.size() - 1);
         }

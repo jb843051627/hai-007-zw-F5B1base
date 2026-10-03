@@ -106,7 +106,7 @@ public class TZwAnomReport implements Serializable {
     private Date closedTime;
 
     @TableField("status")
-    @ApiModelProperty(value = "0在办 1已结案归档 2已退回")
+    @ApiModelProperty(value = "0在办 1已结案归档（结案回退落回 0 在办，不另设终态）")
     private Integer status;
 
     @TableField("del_flag")

@@ -81,26 +81,14 @@ public class TZwSamTaskServiceImpl implements ITZwSamTaskService {
     }
 
     /**
-     * 翻单：已浮出待办、且尚未过约定终结时刻的待派条目。
-     * 浮出/过期一律走 {@link SamDateRule} 谓词，与 {@link #runOnce} 回写同一把尺；窗口不在此把关。
+     * 翻单：此刻已浮出待办的待派条目（status=0）。
+     * 浮出一律走 {@link SamDateRule} 谓词，与 {@link #listCandidates(Date)}（{@link #runOnce} 回写）
+     * 是同一个取数口，谁也不许另写一把尺——过期项也照样浮出（留在账上等撤单/转理），
+     * "过没过期只决定派不派出"，由 {@link #handleOne} 统一处置，窗口不在此把关。
      */
     @Override
     public List<TZwSamTask> listDue(Date at) {
-        List<TZwSamTask> waiting = this.zwSamTaskMapper.selectList(new QueryWrapper<TZwSamTask>()
-                .eq("status", STATUS_WAIT)
-                .eq("del_flag", 0));
-        List<TZwSamTask> due = new ArrayList<TZwSamTask>();
-        for (TZwSamTask r : waiting) {
-            if (r.getDueAt() == null) {
-                continue;
-            }
-            // 同一套讲法：浮出含边界，过期 at > dueAt（等于不算过）
-            if (SamDateRule.surfaced(r.getDueAt(), r.getAmount(), at)
-                    && !SamDateRule.overdue(r.getDueAt(), at)) {
-                due.add(r);
-            }
-        }
-        return due;
+        return listCandidates(at);
     }
 
     /**

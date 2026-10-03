@@ -406,7 +406,7 @@ CREATE TABLE IF NOT EXISTS t_zw_anom_report (
   close_opinion varchar(500) DEFAULT NULL COMMENT '结案结论（归档那一次写下的为准）',
   closed_by varchar(64) DEFAULT NULL COMMENT '结案归档人',
   closed_time datetime DEFAULT NULL COMMENT '结案归档时刻',
-  status int DEFAULT '0' COMMENT '单据情形 0在办 1已结案归档 2已退回(结案段回退作废，整单终态留痕)',
+  status int DEFAULT '0' COMMENT '单据情形 0在办 1已结案归档（结案回退落回 0 在办，不另设终态）',
   del_flag int DEFAULT '0' COMMENT '删除标记 0正常 1删除（上报单不删）',
   create_by varchar(64) DEFAULT NULL COMMENT '创建者',
   create_time datetime DEFAULT NULL COMMENT '创建时间',
@@ -632,3 +632,11 @@ CREATE TABLE IF NOT EXISTS t_zw_report_action (
 -- 演示链路的头两笔动作（上报 → 内部处置在办）
 INSERT IGNORE INTO t_zw_report_action (id, report_id, seq_no, action, step_no, detail, actor, act_time, del_flag)
 VALUES (920101, 9201, 1, 'REPORT', 0, '严重超标异常上报：须复测并停水', 'seed', NOW(), 0);
+
+-- ============================================================================
+-- 历史数据迁移：上报单情形旧口径 status=2（已退回终态）已废——结案回退后单据回到
+-- 0 在办（退回只追加一笔动作台账，处置步退一格，整单不是终态）。旧库升级时把残留的
+-- 2 全部归一到 0，让历史单与新代码的两态口径对上：否则这些单既不在办又不是已结案，
+-- 页面两条通道都翻不出来、成了僵尸单。语句幂等，无 2 时 0 行受影响。
+-- ============================================================================
+UPDATE t_zw_anom_report SET status = 0 WHERE status = 2 AND del_flag = 0;

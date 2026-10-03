@@ -167,6 +167,11 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
         if (!c.getSiteNo().equals(r.getSiteNo())) {
             return reject(rejectMsg, "联系人不属于本单点位「" + r.getSiteNo() + "」，不许张冠李戴");
         }
+        if (!first && c.getId().equals(r.getContactId())) {
+            // 同一反映对象重复提交（双击/重试）：什么都没变，幂等放回——不许记成一笔"订正反映对象"，
+            // 更不许把盯办条结了重开；否则动作台账与盯办流水两边各多记一笔没发生的流转。
+            return this.zwAnomReportMapper.selectById(r.getId());
+        }
         // 联系人允许在反映后步随时订正（需求本意：卡住多半是联系人取错/联系不上）；
         // 已开盯办条各自带着当时快照不受影响，新开的盯办条照新联系人钉。
 
@@ -416,10 +421,12 @@ public class TZwAnomReportServiceImpl implements ITZwAnomReportService {
                         .eq("step_no", AnomalyChain.STEP_REFLECTED)
                         .eq("status", AnomalyChain.REPORT_RUNNING)
                         .eq("del_flag", 0));
-                appendAction(after.getReportId(), AnomalyChain.ACT_RETEST_DONE,
-                        AnomalyChain.STEP_RETEST_BACK,
-                        "复测四环全部通过，处置进入复测回程", operator, now);
+                // 台账只在真正推进落定时追加：并发下后到者 0 行，不留悬空一笔，
+                // 步次与动作台账、盯办必须同进同退（与 reflect 补推进同一口径）
                 if (n > 0) {
+                    appendAction(after.getReportId(), AnomalyChain.ACT_RETEST_DONE,
+                            AnomalyChain.STEP_RETEST_BACK,
+                            "复测四环全部通过，处置进入复测回程", operator, now);
                     this.zwFollowService.openStep(after.getReportId(),
                             AnomalyChain.STEP_RETEST_BACK, now);
                 }

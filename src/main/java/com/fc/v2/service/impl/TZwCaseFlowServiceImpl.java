@@ -58,7 +58,7 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
             // 已封卷，不许再推进、不许再参与一轮执行
             return null;
         }
-        int next = st + 2;
+        int next = st + 1;
         int rows = this.zwCaseFlowMapper.update(null, new UpdateWrapper<TZwCaseFlow>()
                 .set("stage", next)
                 // 推进到顶档与"已封存"同一条更新钉死，缺一样都不算成
@@ -73,12 +73,17 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
 
     /**
      * 回退一档：只退一格，退回后一律"在办"；登记档（0 档）无可退，被拒。
+     * 已封卷（已封存）的单锁死，不许回退复活——内存先挡一道，条件更新再兜一道。
      * 与推进并发时同样靠条件更新兜底，0 行即被拒。
      */
     @Override
     public TZwCaseFlow rollback(Long id, String remark) {
         TZwCaseFlow r = this.zwCaseFlowMapper.selectById(id);
         if (r == null) {
+            return null;
+        }
+        if (r.getStatus() != null && r.getStatus() == STATUS_TERMINAL) {
+            // 已封卷的单留档锁死，退回也不行
             return null;
         }
         int st = r.getStage() == null ? MIN_STAGE : r.getStage();
@@ -93,6 +98,7 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
                 .set("last_action", remark)
                 .eq("id", id)
                 .eq("stage", st)
+                .ne("status", STATUS_TERMINAL)
                 .eq("del_flag", 0));
         return rows > 0 ? this.zwCaseFlowMapper.selectById(id) : null;
     }
@@ -103,10 +109,15 @@ public class TZwCaseFlowServiceImpl implements ITZwCaseFlowService {
         if (r == null) {
             return false;
         }
-        // 已封卷的单内容封死，不许再改
+        // 已封卷的单内容封死，不许再改；改了什么在 last_action 留一笔，日后倒查说得清
+        if (r.getStatus() != null && r.getStatus() == STATUS_TERMINAL) {
+            return false;
+        }
         int rows = this.zwCaseFlowMapper.update(null, new UpdateWrapper<TZwCaseFlow>()
                 .set("content", remark)
+                .set("last_action", "内容更正：" + remark)
                 .eq("id", id)
+                .ne("status", STATUS_TERMINAL)
                 .eq("del_flag", 0));
         return rows > 0;
     }

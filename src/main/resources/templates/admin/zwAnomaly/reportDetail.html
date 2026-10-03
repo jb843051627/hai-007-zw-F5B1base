@@ -227,12 +227,18 @@
         form.render();
         let A = rootPath + '/zwAnomaly/', R = rootPath + '/zwRetest/', F = rootPath + '/zwFollow/';
 
+        // 同一页只许有一笔动作在途：结案回退后单据状态已变，双击的第二笔若放出去，
+        // 会被同一通道按"在办退回上一格"再收一次——点一下就连退两格直到最开始那一格。
+        let busy = false;
+
         function post(url, data, okMsg) {
+            if (busy) { return; }
+            busy = true;
             $.post(url, data, function (res) {
                 layer.msg(res.msg || (res.code === 200 ? '已落账' : '未受理'),
                     {icon: res.code === 200 ? 1 : 2, time: 900},
                     function () { if (res.code === 200) location.reload(); });
-            });
+            }).always(function () { busy = false; });
         }
         function promptAct(title, url, field) {
             layer.prompt({title: title, formType: 2}, function (text, idx) {

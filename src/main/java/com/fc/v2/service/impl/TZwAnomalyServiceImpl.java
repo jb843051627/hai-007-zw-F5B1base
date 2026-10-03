@@ -196,7 +196,8 @@ public class TZwAnomalyServiceImpl implements ITZwAnomalyService {
     @Override
     public AnomalyView buildView(Long id) {
         TZwAnomaly a = this.zwAnomalyMapper.selectById(id);
-        if (a == null) {
+        // 与台账列表同一道"未删除"：随版置删/重判降级置删的登记，下钻也不摆出来
+        if (a == null || int1(a.getDelFlag())) {
             return null;
         }
         TZwImpRow row = this.zwImpRowMapper.selectById(a.getImpRowId());

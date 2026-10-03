@@ -22,9 +22,9 @@ public interface ITZwSamTaskService {
     List<TZwSamTask> selectTZwSamTaskList(Wrapper<TZwSamTask> queryWrapper);
 
     /**
-     * 该时刻已浮出待办、且尚未过约定终结时刻的待派条目（status=0）。
-     * 浮出/过期判定走 {@link com.fc.v2.service.zw.SamDateRule} 唯一口径，
-     * 与 {@link #runOnce(Date)} 回写时用的是同一套谓词；窗口是否放行不在此把关。
+     * 该时刻已浮出待办的待派条目（status=0，含已过约定终结时刻者——过期只影响派不派出，
+     * 条目仍要留在账上等撤单/转理）。浮出判定走 {@link com.fc.v2.service.zw.SamDateRule} 唯一口径，
+     * 与 {@link #runOnce(Date)} 回写时的候选取数是同一个口；窗口是否放行不在此把关。
      */
     List<TZwSamTask> listDue(Date at);
 

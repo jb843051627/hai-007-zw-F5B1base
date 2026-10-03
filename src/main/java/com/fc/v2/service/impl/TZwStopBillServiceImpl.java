@@ -521,9 +521,11 @@ public class TZwStopBillServiceImpl implements ITZwStopBillService {
 
     /** 名下是否还有未完结处置单（未起/在办都算；已封存不算） */
     private boolean hasOpenCase(String siteNo) {
+        // 不能用 ne(status,2)：SQL 三值逻辑下 NULL <> 2 结果是 NULL 而非 TRUE，
+        // status 为空（未起）的历史单会整行漏数，第二道该锁没锁。NULL 与非 2 都算未完结。
         Integer n = this.zwCaseFlowMapper.selectCount(new QueryWrapper<TZwCaseFlow>()
                 .eq("site_no", siteNo)
-                .ne("status", CASE_TERMINAL)
+                .and(w -> w.isNull("status").or().ne("status", CASE_TERMINAL))
                 .eq("del_flag", 0));
         return n != null && n > 0;
     }
